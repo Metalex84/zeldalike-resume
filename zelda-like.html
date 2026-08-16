@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Sala del Aventurero</title>
+<style>
+  :root {
+    --bg-dark: #1a1410;
+    --grass-a: #eaf3e6;
+    --grass-b: #e2ede0;
+    --wall: #4a3520;
+    --wall-edge: #2e2314;
+    --ink: #f5ecd8;
+    --box-bg: #241a12;
+    --box-border: #c9a24b;
+    --accent: #e0b23c;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  #title {
+    color: var(--accent);
+    font-size: 20px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  canvas {
+    background: var(--grass-a);
+    border: 6px solid var(--wall-edge);
+    border-radius: 4px;
+    image-rendering: pixelated;
+  }
+  #hint {
+    color: #a89a82;
+    font-size: 13px;
+  }
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #241a12;
+    border: 2px solid var(--box-border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    color: var(--ink);
+    font-size: 13px;
+  }
+  #controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #iconPalette {
+    display: flex;
+    gap: 6px;
+  }
+  .icon-btn {
+    width: 34px;
+    height: 34px;
+    font-size: 18px;
+    background: #1a1410;
+    border: 1px solid var(--box-border);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .icon-btn:hover {
+    background: #3a2c1c;
+  }
+  .icon-btn.selected {
+    background: var(--accent);
+    border-color: var(--ink);
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title">La Sala del Aventurero</div>
+  <div id="controls">
+    <span>Elige tu icono:</span>
+    <div id="iconPalette"></div>
+  </div>
+  <canvas id="game" width="640" height="480"></canvas>
+  <div id="hint">Flechas: moverse &nbsp;·&nbsp; Espacio o clic (izq./der.): interactuar / cerrar mensaje</div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ---------- Sala (los "muros" delimitan el cuadrilátero jugable) ----------
+const WALL = 32;
+const room = { x: WALL, y: WALL, w: W - WALL * 2, h: H - WALL * 2 };
+
+// ---------- Jugador ----------
+const player = {
+  x: W / 2 - 12,
+  y: H / 2 - 12,
+  w: 24,
+  h: 24,
+  speed: 2.6,
+  dir: 'down' // 'up' | 'down' | 'left' | 'right' -> para saber hacia dónde "mira"
+};
+
+// ---------- Apariencia del personaje ----------
+// icon: se elige desde la paleta de abajo. color: fijo, no editable por el usuario.
+const appearance = {
+  icon: '🧙',
+  color: '#e0d0a0'
+};
+
+const ICON_CHOICES = ['🧙', '🗡️', '🤠', '🦊', '🐱', '👸', '🧝', '🐸'];
+
+const palette = document.getElementById('iconPalette');
+ICON_CHOICES.forEach((emoji) => {
+  const btn = document.createElement('button');
+  btn.className = 'icon-btn' + (emoji === appearance.icon ? ' selected' : '');
+  btn.textContent = emoji;
+  btn.type = 'button';
+  btn.addEventListener('click', () => {
+    appearance.icon = emoji;
+    document.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+  });
+  palette.appendChild(btn);
+});
+
+// ---------- Objetos interactuables ----------
+// Cada objeto tiene una posición, un color/forma simple, y un mensaje.
+const objects = [
+  {
+    x: 110, y: 100, w: 34, h: 34, icon: '🧰',
+    label: 'Cofre', message: '¡Has encontrado 15 rupias!'
+  },
+  {
+    x: W - 150, y: 100, w: 34, h: 34, icon: '🗿',
+    label: 'Estatua', message: 'La estatua del antiguo héroe te observa en silencio.'
+  },
+  {
+    x: 110, y: H - 150, w: 34, h: 34, icon: '⛲',
+    label: 'Fuente', message: 'El agua está fría y clara. Te sientes renovado.'
+  },
+  {
+    x: W - 150, y: H - 150, w: 30, h: 40, icon: '🪧',
+    label: 'Señal', message: '"Cuidado viajero: al norte mora el dragón."'
+  },
+  {
+    x: W / 2 - 15, y: 90, w: 30, h: 30, icon: '🌳',
+    label: 'Arbusto', message: 'Solo hojas. Nada escondido aquí... esta vez.'
+  }
+];
+
+// ---------- Entrada de teclado ----------
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) {
+    e.preventDefault();
+  }
+  keys[e.key] = true;
+  if (e.key === ' ') handleInteract();
+});
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+// El clic izquierdo o derecho sobre el canvas hace lo mismo que Espacio
+// (empezar el juego, interactuar, o cerrar un mensaje).
+canvas.addEventListener('click', () => handleInteract());
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault(); // evita que el clic derecho abra el menú contextual del navegador
+  handleInteract();
+});
+
+// ---------- Pantalla de bienvenida ----------
+let gameStarted = false;
+
+// ---------- Diálogo ----------
+let activeMessage = null; // texto mostrado actualmente, o null
+
+function handleInteract() {
+  if (!gameStarted) {
+    gameStarted = true;
+    return;
+  }
+  if (activeMessage) {
+    // Si ya hay un mensaje abierto, Espacio lo cierra
+    activeMessage = null;
+    return;
+  }
+  const target = getInteractableObject();
+  if (target) {
+    activeMessage = target.message;
+  }
+}
+
+// Devuelve el objeto interactuable más cercano frente al jugador (si hay alguno a distancia)
+function getInteractableObject() {
+  const reach = 14; // margen de alcance alrededor del jugador
+  const px = player.x - reach, py = player.y - reach;
+  const pw = player.w + reach * 2, ph = player.h + reach * 2;
+
+  for (const obj of objects) {
+    if (rectsOverlap(px, py, pw, ph, obj.x, obj.y, obj.w, obj.h)) {
+      return obj;
+    }
+  }
+  return null;
+}
+
+function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+// ---------- Movimiento y colisiones ----------
+function update() {
+  if (!gameStarted) return; // el juego no arranca hasta pulsar Espacio en la bienvenida
+  if (activeMessage) return; // el juego se "pausa" mientras se lee un mensaje, como en Zelda
+
+  let dx = 0, dy = 0;
+  if (keys['ArrowUp'])    { dy -= player.speed; player.dir = 'up'; }
+  if (keys['ArrowDown'])  { dy += player.speed; player.dir = 'down'; }
+  if (keys['ArrowLeft'])  { dx -= player.speed; player.dir = 'left'; }
+  if (keys['ArrowRight']) { dx += player.speed; player.dir = 'right'; }
+
+  // Movemos eje por eje para poder "deslizar" contra los muros/objetos
+  tryMove(dx, 0);
+  tryMove(0, dy);
+}
+
+function tryMove(dx, dy) {
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+
+  // Límites de la sala
+  if (nx < room.x || nx + player.w > room.x + room.w) return;
+  if (ny < room.y || ny + player.h > room.y + room.h) return;
+
+  // Colisión con objetos (el jugador no puede atravesarlos)
+  for (const obj of objects) {
+    if (rectsOverlap(nx, ny, player.w, player.h, obj.x, obj.y, obj.w, obj.h)) {
+      return;
+    }
+  }
+
+  player.x = nx;
+  player.y = ny;
+}
+
+// ---------- Dibujo ----------
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  drawFloor();
+  drawWalls();
+  objects.forEach(drawObject);
+  drawPlayer();
+  if (activeMessage) drawDialog(activeMessage);
+  if (!gameStarted) drawWelcome();
+}
+
+function drawWelcome() {
+  // Fondo oscurecido para resaltar el pop-up
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  const boxW = 380, boxH = 150;
+  const boxX = (W - boxW) / 2, boxY = (H - boxH) / 2;
+
+  ctx.fillStyle = '#241a12';
+  ctx.strokeStyle = '#c9a24b';
+  ctx.lineWidth = 3;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = '#e0b23c';
+  ctx.font = 'bold 20px Trebuchet MS, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('La Sala del Aventurero', W / 2, boxY + 44);
+
+  ctx.fillStyle = '#f5ecd8';
+  ctx.font = '16px Trebuchet MS, sans-serif';
+  ctx.fillText('Explora la sala y descubre sus secretos.', W / 2, boxY + 80);
+
+  ctx.fillStyle = '#e0b23c';
+  ctx.font = 'bold 15px Trebuchet MS, sans-serif';
+  ctx.fillText('Presiona Espacio para continuar', W / 2, boxY + 118);
+}
+
+function drawFloor() {
+  const tile = 32;
+  for (let y = room.y; y < room.y + room.h; y += tile) {
+    for (let x = room.x; x < room.x + room.w; x += tile) {
+      const even = ((x - room.x) / tile + (y - room.y) / tile) % 2 === 0;
+      ctx.fillStyle = even ? '#eaf3e6' : '#e2ede0';
+      ctx.fillRect(x, y, tile, tile);
+    }
+  }
+}
+
+function drawWalls() {
+  ctx.fillStyle = '#4a3520';
+  ctx.fillRect(0, 0, W, WALL);                 // arriba
+  ctx.fillRect(0, H - WALL, W, WALL);           // abajo
+  ctx.fillRect(0, 0, WALL, H);                  // izquierda
+  ctx.fillRect(W - WALL, 0, WALL, H);           // derecha
+  ctx.strokeStyle = '#2e2314';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(WALL/2, WALL/2, W - WALL, H - WALL);
+}
+
+function drawObject(obj) {
+  const cx = obj.x + obj.w / 2;
+  const cy = obj.y + obj.h / 2;
+
+  // Sombra sutil en el suelo, para dar sensación de volumen bajo el icono
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(cx, obj.y + obj.h - 4, obj.w / 2.4, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.font = '28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(obj.icon, cx, cy);
+
+  // Si el jugador está en rango, mostramos un pequeño indicador "!"
+  const target = getInteractableObject();
+  if (target === obj && !activeMessage) {
+    ctx.fillStyle = '#ffe98a';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText('!', cx, obj.y - 8);
+  }
+}
+
+function drawPlayer() {
+  const cx = player.x + player.w / 2;
+  const cy = player.y + player.h / 2;
+
+  // Base: un círculo con el color elegido, a modo de "peana" del personaje
+  ctx.fillStyle = appearance.color;
+  ctx.strokeStyle = '#8a6a30';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 6, player.w / 2, player.h / 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Icono personalizable (emoji o carácter) dibujado encima
+  if (appearance.icon) {
+    ctx.font = '26px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(appearance.icon, cx, cy - 4);
+  }
+
+  // Una pequeña flecha indica hacia dónde mira el personaje
+  ctx.fillStyle = '#8a3030';
+  ctx.beginPath();
+  if (player.dir === 'up')    { ctx.moveTo(cx, cy - 20); ctx.lineTo(cx - 5, cy - 14); ctx.lineTo(cx + 5, cy - 14); }
+  if (player.dir === 'down')  { ctx.moveTo(cx, cy + 18); ctx.lineTo(cx - 5, cy + 12); ctx.lineTo(cx + 5, cy + 12); }
+  if (player.dir === 'left')  { ctx.moveTo(cx - 18, cy); ctx.lineTo(cx - 10, cy - 5); ctx.lineTo(cx - 10, cy + 5); }
+  if (player.dir === 'right') { ctx.moveTo(cx + 18, cy); ctx.lineTo(cx + 10, cy - 5); ctx.lineTo(cx + 10, cy + 5); }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawDialog(text) {
+  const boxH = 90;
+  const boxY = H - boxH - 20;
+  const boxX = 30;
+  const boxW = W - 60;
+
+  ctx.fillStyle = '#241a12';
+  ctx.strokeStyle = '#c9a24b';
+  ctx.lineWidth = 3;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = '#f5ecd8';
+  ctx.font = '16px Trebuchet MS, sans-serif';
+  ctx.textAlign = 'left';
+  wrapText(text, boxX + 18, boxY + 32, boxW - 36, 22);
+
+  ctx.fillStyle = '#e0b23c';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('Espacio ▶', boxX + boxW - 14, boxY + boxH - 14);
+}
+
+function wrapText(text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '';
+  let offsetY = y;
+  for (const word of words) {
+    const test = line + word + ' ';
+    if (ctx.measureText(test).width > maxWidth && line !== '') {
+      ctx.fillText(line, x, offsetY);
+      line = word + ' ';
+      offsetY += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  ctx.fillText(line, x, offsetY);
+}
+
+// ---------- Bucle principal ----------
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
